@@ -47,8 +47,8 @@ jobs:
               for port in item.get('ports', []):
                   assert name in {'cwmp', 'nbi'}, f'{name} unexpectedly has a host port'
                   assert port.get('host_ip') == '127.0.0.1', f'{name} publishes a non-local port'
-          assert services['mongo']['networks'] == ['database']
-          assert services['nbi']['networks'] == ['database']
+          assert set(services['mongo']['networks']) == {'database'}
+          assert set(services['nbi']['networks']) == {'database'}
           assert 'cloudflare' in services['cloudflared']['networks']
           assert 'database' not in services['gateway']['networks']
           assert 'database' not in services['cloudflared']['networks']
