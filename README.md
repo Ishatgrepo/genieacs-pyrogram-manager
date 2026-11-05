@@ -11,6 +11,18 @@ A Telegram control center for **authorized, enrolled TR-069 devices**. Uses Pyth
 Kurigram (maintained Pyrogram-compatible APIs), TgCrypto, FastAPI, PyMongo Async and Docker.
 Supports an all-VPS stack or a Hugging Face bot/gateway with a durable VPS core.
 
+## Full VPS through Cloudflare Tunnel (no public IPv4)
+
+This branch adds a **single-hostname** deployment for `api.cat6.in` using
+Docker Compose, an internal Nginx gateway, and an outbound Cloudflare Tunnel.
+**No public inbound ports, host TLS certificates, or extra subdomains are needed.**
+It runs the entire GenieACS / Telegram / MongoDB stack on one server.
+
+**Start here:** [Cloudflare deployment guide](deploy/cloudflare/README.md)
+using `docker-compose.cloudflare.yml`. The standard Compose instructions
+below are for the separate, direct-public-IP deployment and do not apply to
+this Cloudflare variant.
+
 ## What it does
 
 * Discovers devices, queues first-seen alerts, and requires enrollment approval.
