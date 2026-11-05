@@ -45,6 +45,9 @@ services:
     environment:
       <<: *genieacs-env
       GENIEACS_CWMP_WORKER_PROCESSES: "2"
+    # Optional secure loopback target for a site-local JFC TLS proxy through
+    # SSH/VPN port forwarding. Never bind this on 0.0.0.0.
+    ports: ["127.0.0.1:7547:7547"]
 
   nbi:
     <<: *genieacs
