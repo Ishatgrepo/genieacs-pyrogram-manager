@@ -1,0 +1,71 @@
+name: Validate web-only Cloudflare ACS
+on:
+  push:
+    paths:
+      - 'docker-compose.webui.yml'
+      - 'deploy/webui/**'
+      - '.github/workflows/webui-cloudflare.yml'
+  pull_request:
+    paths:
+      - 'docker-compose.webui.yml'
+      - 'deploy/webui/**'
+      - '.github/workflows/webui-cloudflare.yml'
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build temporary non-secret test configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp deploy/webui/env.example .env
+          cp deploy/webui/tunnel.env.example .env.tunnel
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('.env')
+          s = p.read_text()
+          for k in ('MONGO_ROOT_PASSWORD', 'MONGO_ACS_PASSWORD', 'GENIEACS_UI_JWT_SECRET'):
+              s = s.replace(k+'=\n', k+'='+'a'*64+'\n')
+          s = s.replace('CPE_USERNAME=\n', 'CPE_USERNAME=example-cpe\n')
+          s = s.replace('CPE_PASSWORD=\n', 'CPE_PASSWORD=not-a-real-password\n')
+          p.write_text(s)
+          PY
+          mkdir -p secrets
+          printf 'admin:example-not-valid-password-hash\n' > secrets/ui.htpasswd
+      - name: Validate Compose topology and localhost-only ports
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose.webui.yml config --quiet
+          docker compose -f docker-compose.webui.yml config --format json > /tmp/webui-compose.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          doc = json.loads(Path('/tmp/webui-compose.json').read_text())
+          services = doc['services']
+          expected = {'mongo','cwmp','nbi','fs','ui','gateway','cloudflared'}
+          assert set(services) == expected, (expected, set(services))
+          for name, item in services.items():
+              for port in item.get('ports', []):
+                  assert name in {'cwmp','nbi'}, f'unexpected published port in {name}'
+                  assert port.get('host_ip') == '127.0.0.1', f'{name} publishes a non-loopback port'
+          assert 'application' in services['gateway']['networks']
+          assert 'cloudflare' in services['cloudflared']['networks']
+          assert 'database' not in services['gateway']['networks']
+          assert 'database' not in services['cloudflared']['networks']
+          PY
+      - name: Validate Nginx configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --add-host cwmp:127.0.0.1 \
+            --add-host fs:127.0.0.1 \
+            --add-host ui:127.0.0.1 \
+            -v "$PWD/deploy/webui/nginx.conf:/etc/nginx/nginx.conf:ro" \
+            -v "$PWD/secrets/ui.htpasswd:/etc/nginx/auth/ui.htpasswd:ro" \
+            nginx:stable-alpine nginx -t
