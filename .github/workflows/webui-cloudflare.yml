@@ -1,4 +1,4 @@
-name: Validate web-only Cloudflare ACS
+name: Validate minimal GenieACS WebUI Cloudflare deployment
 on:
   push:
     paths:
@@ -20,25 +20,17 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-      - name: Build temporary non-secret test configuration
+      - name: Validate installer shell
+        run: bash -n deploy/webui/setup.sh
+      - name: Prepare CI-only (non-secret) configuration
         shell: bash
         run: |
           set -euo pipefail
-          cp deploy/webui/env.example .env
+          printf 'GENIEACS_UI_JWT_SECRET=%064d\n' 0 > .env
           cp deploy/webui/tunnel.env.example .env.tunnel
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('.env')
-          s = p.read_text()
-          for k in ('MONGO_ROOT_PASSWORD', 'MONGO_ACS_PASSWORD', 'GENIEACS_UI_JWT_SECRET'):
-              s = s.replace(k+'=\n', k+'='+'a'*64+'\n')
-          s = s.replace('CPE_USERNAME=\n', 'CPE_USERNAME=example-cpe\n')
-          s = s.replace('CPE_PASSWORD=\n', 'CPE_PASSWORD=not-a-real-password\n')
-          p.write_text(s)
-          PY
           mkdir -p secrets
           printf 'admin:example-not-valid-password-hash\n' > secrets/ui.htpasswd
-      - name: Validate Compose topology and localhost-only ports
+      - name: Validate isolated Compose topology
         shell: bash
         run: |
           set -euo pipefail
@@ -47,18 +39,21 @@ jobs:
           python3 - <<'PY'
           import json
           from pathlib import Path
-          doc = json.loads(Path('/tmp/webui-compose.json').read_text())
-          services = doc['services']
-          expected = {'mongo','cwmp','nbi','fs','ui','gateway','cloudflared'}
-          assert set(services) == expected, (expected, set(services))
+          cfg = json.loads(Path('/tmp/webui-compose.json').read_text())
+          services = cfg['services']
+          expected = {'mongo', 'cwmp', 'nbi', 'fs', 'ui', 'gateway', 'cloudflared'}
+          assert set(services) == expected, (set(services), expected)
           for name, item in services.items():
               for port in item.get('ports', []):
-                  assert name in {'cwmp','nbi'}, f'unexpected published port in {name}'
-                  assert port.get('host_ip') == '127.0.0.1', f'{name} publishes a non-loopback port'
-          assert 'application' in services['gateway']['networks']
+                  assert name in {'cwmp', 'nbi'}, f'{name} unexpectedly has a host port'
+                  assert port.get('host_ip') == '127.0.0.1', f'{name} publishes a non-local port'
+          assert services['mongo']['networks'] == ['database']
+          assert services['nbi']['networks'] == ['database']
           assert 'cloudflare' in services['cloudflared']['networks']
           assert 'database' not in services['gateway']['networks']
           assert 'database' not in services['cloudflared']['networks']
+          assert 'manager' not in services, 'No Telegram service allowed'
+          assert 'MONGO_INITDB_ROOT_PASSWORD' not in services['mongo'].get('environment', {})
           PY
       - name: Validate Nginx configuration
         shell: bash
