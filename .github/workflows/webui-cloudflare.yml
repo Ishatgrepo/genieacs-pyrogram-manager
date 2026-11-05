@@ -2,11 +2,13 @@ name: Validate web-only Cloudflare ACS
 on:
   push:
     paths:
+      - 'README.md'
       - 'docker-compose.webui.yml'
       - 'deploy/webui/**'
       - '.github/workflows/webui-cloudflare.yml'
   pull_request:
     paths:
+      - 'README.md'
       - 'docker-compose.webui.yml'
       - 'deploy/webui/**'
       - '.github/workflows/webui-cloudflare.yml'
