@@ -58,3 +58,13 @@ leases assign each worker family to a process, and database-backed state survive
 of a replica. Load-test on real MongoDB before production. Monitor worker logs, Mongo
 storage/TTL behavior, NBI latency, queue sizes and `/healthz`. HTTP access logging is off
 to avoid leaking sensitive query values; requests carry X-Request-ID.
+
+## MongoDB host kernel compatibility
+
+MongoDB 8.0 rejects Linux kernels 6.19 through 7.0.13 because of an allocator/kernel
+incompatibility. Containers share the host kernel. Use a MongoDB-supported stock kernel
+(e.g. the Ubuntu 22.04/24.04 supported kernel series), or a documented fixed kernel/release
+combination. Do not suppress MongoDB's startup check. CI uses Ubuntu 22.04 instead of the
+moving ubuntu-latest image after observing this exact startup failure.
+
+Reference: https://www.mongodb.com/docs/manual/administration/production-notes/
