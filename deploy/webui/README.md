@@ -1,291 +1,186 @@
-# Central GenieACS Web UI on acs.cat6.in (Cloudflare Tunnel)
+# One-command GenieACS WebUI on acs.cat6.in
 
-**No Telegram bot. No manager container. No public IPv4. No ACS installed on each PC.**
+**Web-only, JFC-style setup.** No Telegram bot. No public IPv4. No MongoDB
+password to enter. No TR-069/CPE username or password to enter. One central
+GenieACS deployment for multiple PCs/sites. The only inputs are:
 
-This deployment runs one persistent GenieACS server (CWMP, NBI, file server
-and **native browser-based GenieACS management UI**) plus MongoDB, Nginx,
-and cloudflared on a Linux VPS or always-on home server.
+1. Your **WebUI password**, entered twice for confirmation.
+2. Your **Cloudflare Tunnel token**, copied from Cloudflare.
 
-> Important: This does **not** replace all the device-side requirements of
-> the [JFC-Group Housekeeping PoC](https://github.com/JFC-Group/Housekeeping-PoC).
-> Read the JFC compatibility section before using it with a Jio STB.
+The installer automatically creates a random GenieACS UI JWT signing secret.
+MongoDB runs **without authentication**, like the JFC-Group PoC, but is
+restricted to an internal Docker-only network. The CWMP endpoint is also
+unauthenticated, as in the JFC PoC; this makes registration easier but is
+**unsafe for an unrestricted public ACS**. Restrict CWMP access to your
+authorized source IPs or controlled site gateways when possible, and use
+authenticated CPE enrollment for a production deployment.
 
-## Where everything lives
+The public UI has HTTP Basic Auth (bcrypt hash) in front of the native
+GenieACS login/setup. Your WebUI username is always `admin`.
 
-| URL / port | Function | Protection |
-| --- | --- | --- |
-| `https://acs.cat6.in/` | GenieACS **web UI** | Nginx Basic Auth **and** native GenieACS login |
-| `https://acs.cat6.in/cwmp/` | TR-069/CWMP device endpoint | GenieACS CWMP auth; no browser login |
-| `https://acs.cat6.in/files/` | Approved ACS file downloads | Never upload unknown firmware |
-| `127.0.0.1:7547` on VPS | CWMP for optional SSH/VPN site relay | Host loopback only |
-| `127.0.0.1:7557` on VPS | GenieACS NBI for optional SSH/VPN admin relay | Host loopback only |
-| `mongo:27017` | Database | Internal Docker network |
+## 1. Create the Cloudflare Tunnel
 
-**NBI is never published under acs.cat6.in.** It has no default
-bearer-token authentication. Never expose it publicly or bind 7557 to
-`0.0.0.0`. The UI is the supported remote control surface.
+1. In Cloudflare, make sure `cat6.in` is managed as a Cloudflare DNS zone.
+2. Go to **Networking > Tunnels**, create a **remotely managed Cloudflared
+   tunnel** (suggested name `genieacs-webui`).
+3. Copy the **tunnel token**; do not install a separate cloudflared service
+   on the VPS, since Docker Compose includes its own connector.
+4. Add a single published application:
 
-All device configurations, presets, tasks, parameters, and file uploads
-are managed through **GenieACS's own web UI**, not the Pyrogram manager.
+   | Field | Value |
+   | --- | --- |
+   | Public hostname | `acs.cat6.in` |
+   | Service | `HTTP` |
+   | Service URL | `http://gateway:8080` |
 
-## Requirements
+   The internal hostname `gateway` is resolved by Docker from
+   the cloudflared container. Do not use `localhost` or your VPS IP.
+   If an old record already uses `acs.cat6.in`, resolve the conflict
+   intentionally.
 
-- Linux VPS or server with outbound Internet; Docker Engine and Compose v2.
-- Domain **cat6.in** configured with Cloudflare DNS.
-- A remotely managed Cloudflare Tunnel token.
-- Device firmware able to connect to `https://acs.cat6.in/cwmp/` over TLS 443
-  **and** configured with your ACS URL and CPE credentials.
-- A browser to access the web UI. No VPS public IPv4, DNS A record pointing
-  to your VPS, or inbound firewall ports are necessary.
-- MongoDB 8.0 compatible CPU/kernel, adequate RAM and persistent disk.
+Cloudflare handles public HTTPS (443), and cloudflared makes outbound
+connections. No public IPv4 or inbound firewall ports are required.
+Avoid Cloudflare Access login/CAPTCHA/browser challenges on `/cwmp/*`
+or `/files/*` because standard embedded TR-069 clients cannot
+complete browser challenges. The UI has its own Basic Auth and native
+GenieACS login. Consider Cloudflare IP allowlisting for CWMP.
 
-## 1. Create a Cloudflare Tunnel
+## 2. Install Docker and download the web-only branch
 
-In the Cloudflare dashboard, go to **Networking > Tunnels**, create a
-**remotely managed cloudflared** tunnel (e.g. `genieacs-webui`), and obtain
-its **connector token**. Do not run its standalone installer on the VPS.
-
-Add one **Published application** route:
-
-| Field | Value |
-| --- | --- |
-| Public hostname | `acs.cat6.in` |
-| Service type | `HTTP` |
-| Service URL | `http://gateway:8080` |
-
-`gateway` is the Docker Compose container name resolved **inside the
-cloudflared container**. Do not enter `localhost` or `acs.cat6.in` in
-the Service URL. Remove or adjust any conflicting existing Cloudflare DNS
-record for `acs.cat6.in`; do not take down unrelated DNS records.
-
-**Do not enable a domain-wide Cloudflare Access login or JS/CAPTCHA
-challenge for the CPE paths** `/cwmp/*` and `/files/*`: embedded
-TR-069 clients generally cannot solve those challenges. The UI has
-two login layers (Basic Auth + GenieACS). Configure CF caching to bypass
-CWMP/API responses and avoid security challenges on those paths.
-
-Cloudflare Tunnel uses outbound connections; ensure Cloudflare egress is
-allowed (including port 7844 where required by your environment). Public
-HTTPS terminates at Cloudflare; internal gateway-to-GenieACS traffic uses
-HTTP on private Docker networks.
-
-## 2. Download the web-only branch
+Install Docker Engine and Docker Compose v2 on the VPS first.
 
 ```bash
-git clone --branch feature/acs-webui-cloudflare \
+git clone -b feature/acs-webui-cloudflare \
   https://github.com/Ishatgrepo/genieacs-pyrogram-manager.git
 cd genieacs-pyrogram-manager
 ```
 
-The repository may be private; authenticate to GitHub as an authorized
-user if Git asks for credentials.
+The repository may be private and may require GitHub authentication.
 
-Use the *new web-only* configuration, **not** the main branch's Telegram
-`.env.example`:
+**Run this single command:**
 
 ```bash
-cp deploy/webui/env.example .env
-cp deploy/webui/tunnel.env.example .env.tunnel
-chmod 600 .env .env.tunnel
-nano .env
+bash deploy/webui/setup.sh
 ```
 
-Fill in:
+It will ask:
 
-```dotenv
-ACS_HOST=acs.cat6.in
-MONGO_ROOT_PASSWORD=EACH_A_DIFFERENT_RANDOM_HEX
-MONGO_ACS_PASSWORD=EACH_A_DIFFERENT_RANDOM_HEX
-GENIEACS_UI_JWT_SECRET=EACH_A_DIFFERENT_RANDOM_HEX
-CPE_USERNAME=YOUR_DEVICE_USERNAME
-CPE_PASSWORD=YOUR_DEVICE_PASSWORD
+```text
+WebUI password:
+Confirm WebUI password:
+Cloudflare Tunnel token:
 ```
 
-Generate each database password and UI signing secret separately:
+Nothing else is required from you. It automatically generates
+`.env`, `.env.tunnel`, `secrets/ui.htpasswd`, validates the Compose file,
+builds the GenieACS image and launches the full web-only stack.
+
+Re-running the script reuses existing generated credentials and password
+hash; it doesn't replace or delete the MongoDB volume.
+
+## 3. Open the web UI
+
+Browse to:
+
+**https://acs.cat6.in/**
+
+Log in to Nginx Basic Auth with:
+
+- **Username:** `admin`
+- **Password:** the WebUI password you entered during setup.
+
+On the first visit, GenieACS itself may ask you to finish setting up
+its **native** administrator account; this is a separate app-level
+login/setup, not an additional VPS deployment secret.
+
+Once logged into GenieACS, you can view registered devices,
+browse parameters, queue tasks, manage presets/provisions,
+and inspect faults/measurements supported by each device.
+
+## 4. Addresses and ports
+
+| Address | Purpose | Security |
+| --- | --- | --- |
+| `https://acs.cat6.in/` | Native GenieACS WebUI | Basic Auth + GenieACS login |
+| `https://acs.cat6.in/cwmp/` | Standard TR-069 device endpoint | No CPE auth (JFC-style testing) |
+| `https://acs.cat6.in/files/` | GenieACS firmware/file service | Public CPE download path |
+| VPS `127.0.0.1:7547` | CWMP for private site relay | Localhost only |
+| VPS `127.0.0.1:7557` | GenieACS NBI for private site relay | Localhost only |
+| `mongo:27017` | MongoDB | Docker-internal only |
+
+**Never expose 7557 or 27017 to the Internet.** Raw NBI does not
+have the same login protection as the WebUI.
+
+## 5. JFC-Group Housekeeping-PoC: what changes, what doesn't
+
+Read the upstream [JFC README](https://github.com/JFC-Group/Housekeeping-PoC)
+and [stage1.sh](https://github.com/JFC-Group/Housekeeping-PoC/blob/main/stage1.sh).
+
+**This branch replaces the per-PC GenieACS server**, not every part
+of the JFC device-specific connection process.
+
+- An ordinary TR-069 device **you control** that permits changing its
+  ACS URL can connect to `https://acs.cat6.in/cwmp/` over HTTPS 443.
+- A stock JFC-targeted Jio STB is different: upstream `stage1.sh`
+  expects its original ACS hostname on port **8443** (sometimes 9443),
+  a local DNS redirect, and the specialized `tls/pass_front.py`
+  TLS/session-handling proxy. **A Cloudflare HTTP tunnel on 443
+  cannot automatically substitute for those requirements.**
+- To avoid installing MongoDB and GenieACS on every PC, a trusted
+  gateway/site PC can instead use a **secure VPN/SSH port-forward**
+  to this single VPS's localhost CWMP (7547) and NBI (7557) ports.
+  The site's original JFC front-end requirements still apply.
+  The domain tunnel on `acs.cat6.in` does not itself provide an SSH
+  endpoint; set up SSH/VPN separately.
+- The upstream full `stage1.sh` workflow disables the Jio TR-069
+  client after its one-time task. Those boxes won't remain live-managed
+  by GenieACS after the TR-069 client is disabled.
+- JFC's stock client requirements, trust chain, proprietary network
+  checks and port expectations vary by firmware; verify one authorized
+  device/site before scaling.
+
+**Security warning:** Because this mirrors JFC's lack of CPE authentication,
+any device that can reach the public `/cwmp/` route may attempt to
+register or inject device reports. Use Cloudflare source-IP restrictions
+for authorized gateways and monitor device enrollment. If you need
+long-term Internet-facing fleet management, adopt per-device CPE auth.
+
+## 6. Troubleshooting and commands
 
 ```bash
-openssl rand -hex 32
-```
-
-For a real fleet, prefer per-device CPE credentials rather than a shared
-bootstrap credential. Changes to Mongo/ACS passwords **after MongoDB has
-initialized** require database-side rotation; editing `.env` alone does
-not change stored credentials.
-
-Edit `.env.tunnel` and replace the token placeholder:
-
-```dotenv
-TUNNEL_TOKEN=YOUR_CLOUDFLARE_TUNNEL_TOKEN
-```
-
-Never commit or share these files.
-
-## 3. Create the management login
-
-A separate Basic Auth login protects the native GenieACS setup screen.
-Choose a **strong unique password** at the prompt:
-
-```bash
-mkdir -p secrets
-docker run --rm -it -v "$PWD/secrets:/auth" \
-  httpd:2.4-alpine htpasswd -cB /auth/ui.htpasswd admin
-chmod 644 secrets/ui.htpasswd
-```
-
-`htpasswd` stores a **bcrypt hash**, not the plaintext password.
-The file is read-only inside the web gateway. The repo already ignores
-`secrets/`. Use a long, unique password: hashes with read permission
-still deserve protection from offline guessing.
-
-If you want to rotate this Basic Auth credential, run the same
-`htpasswd -B /auth/ui.htpasswd admin` command without `-c`, then restart
-`gateway` if needed. Do not remove Basic Auth protection until native
-GenieACS login is configured and additional restrictions are in place.
-
-## 4. Deploy
-
-```bash
-docker compose -f docker-compose.webui.yml config --quiet
-docker compose -f docker-compose.webui.yml up -d --build
 docker compose -f docker-compose.webui.yml ps
-docker compose -f docker-compose.webui.yml logs --tail=100 cloudflared gateway ui cwmp
-```
-
-Check that the **Cloudflare Tunnel is Healthy** in the dashboard.
-Then open **https://acs.cat6.in/**. Enter the Nginx Basic Auth
-credentials, then complete GenieACS's own first-time UI/account setup.
-Configure GenieACS admin/users/roles securely.
-
-To confirm that the browser UI is not anonymously exposed:
-
-```bash
+docker compose -f docker-compose.webui.yml logs -f cloudflared gateway ui cwmp
 curl -I https://acs.cat6.in/
 ```
 
-The expected initial result is **HTTP 401 Unauthorized** with
-`WWW-Authenticate: Basic`, not a successful anonymous admin page.
+The last command should return HTTP **401 Unauthorized** from Nginx
+for anonymous access to the WebUI. After successful Basic Auth,
+the native GenieACS UI should load.
 
-To monitor CPE communications:
-
-```bash
-docker compose -f docker-compose.webui.yml logs -f cwmp
-```
-
-## 5. Enroll and manage compatible TR-069 devices
-
-Configure an **authorized** TR-069 device with:
-
-```text
-ACS URL: https://acs.cat6.in/cwmp/
-ACS username: CPE_USERNAME in .env
-ACS password: CPE_PASSWORD in .env
-```
-
-Wait for the device to send its CWMP **Inform**. Open the GenieACS UI:
-find the device in **Devices**, inspect reported parameters, check
-**Tasks/Faults**, and create supported presets/provisions as appropriate.
-The UI can queue remote parameter changes and other supported tasks.
-Do not assume an accepted task has completed on-device until its
-response and subsequent data confirm success.
-
-Not every CPE accepts HTTPS port 443, a pathful ACS URL, the CA chain,
-or the default credentials. Test with one device before scaling.
-**Device configuration of the ACS endpoint is a separate step**.
-Putting an ACS on the Internet does not change a device's built-in ACS
-URL automatically.
-
-## 6. JFC-Group Housekeeping-PoC compatibility: important limits
-
-The upstream PoC's [stage1.sh](https://github.com/JFC-Group/Housekeeping-PoC/blob/main/stage1.sh)
-expects a **site-local** `pass_front.py` TLS proxy at **8443/9443**, DNS
-routing for the device's existing ACS host, and a local GenieACS NBI
-endpoint at **127.0.0.1:7557**. The front end also implements special
-device-protocol/session behavior. The separate `unlock.sh` uses local
-ADB and is **not** an ACS server or a Web UI feature.
-
-That means:
-
-1. **Standard TR-069 devices already configured for your hostname:** use
-   `https://acs.cat6.in/cwmp/` directly. The web UI controls them; no
-   local PC needs GenieACS.
-2. **Stock JFC-targeted Jio STBs using their existing ACS hostname/port:**
-   **cannot be made compatible simply by replacing the hostname with
-   acs.cat6.in or pointing DNS to a Cloudflare Tunnel**. The device
-   expects its original host, nonstandard TCP port and the PoC-specific
-   TLS/session behavior. Cloudflare's public HTTP tunnel does not simply
-   proxy the device's port 8443. Do not treat this deployment as a
-   drop-in replacement for `pass_front.py`.
-3. **One local site adapter may still be required**, but you can keep
-   the *ACS itself* centrally on the VPS. For a site gateway connected
-   to the VPS using an authenticated SSH connection/VPN, the VPS exposes
-   loopback-only CWMP **7547** and NBI **7557**; port-forward those
-   privately to the site's local machine. Follow the upstream PoC's
-   requirements for its local TLS/network behavior. You do **not**
-   need to run its Docker ACS on every PC.
-4. The default ACS `cwmp.auth` in this deployment **requires CPE
-   credentials**. The stock JFC PoC used a permissive test ACS;
-   unknown/unconfigured device credentials may cause registration
-   failure. Do not turn off authentication on an Internet-facing ACS
-   as a quick fix. Plan explicit, authorized enrollment instead.
-5. **Important:** After the full `stage1.sh` workflow, the upstream
-   script **disables the device's TR-069 client**. You cannot expect
-   ongoing ACS management of that device unless it remains enrolled
-   and its TR-069 agent is still running.
-
-This repository does **not** copy or bundle JFC firmware keys,
-certificates, TLS impersonation code, or exploits. The upstream PoC may
-require separate LAN-side procedures and may be incompatible with your
-device/build. No JFC exploit was executed or tested here.
-
-### Optional local SSH/VPN port forwarding for a site adapter
-
-If your gateway can already reach the VPS over authenticated SSH
-(private VPN, reachable IPv6, or a separately configured Cloudflare
-SSH Access setup), a long-lived secure tunnel to the **one central
-server** can forward the internal ports:
+To check which CWMP auth config is stored (especially important if
+reusing an *existing* database volume from an earlier deployment):
 
 ```bash
-ssh -N -o ExitOnForwardFailure=yes \
-  -L 127.0.0.1:7547:127.0.0.1:7547 \
-  -L 127.0.0.1:7557:127.0.0.1:7557 \
-  USER@VPS_REACHABLE_SSH_ADDRESS
+docker compose -f docker-compose.webui.yml exec -T mongo \
+  mongosh --quiet genieacs --eval 'db.config.findOne({_id:"cwmp.auth"})'
 ```
 
-The local gateway then has `127.0.0.1:7547` for a compatible private
-CWMP proxy and `127.0.0.1:7557` for trusted administrative clients.
-Do **not** expose the NBI on the LAN or through a public Cloudflare
-HTTP route. SSH itself is **not** made reachable just by the
-`acs.cat6.in` web tunnel; you need a separate secure SSH/VPN path.
+**A fresh installation does not insert `cwmp.auth`.** An existing volume
+may still contain a previously configured auth rule; the installer does
+**not** silently delete existing authentication settings.
 
-## Backups and useful commands
-
-Database is a **named persistent Docker volume**. Keep MongoDB
-backups and all secrets separate from GitHub. To stop:
+To stop without deleting the database:
 
 ```bash
 docker compose -f docker-compose.webui.yml down
 ```
 
-Do **not** use `down -v` unless you intend to erase your ACS database.
+**Never use `down -v`** unless you intentionally want to erase the MongoDB
+database. Store backups and credentials securely.
 
-To restart:
+## Deployment verification
 
-```bash
-docker compose -f docker-compose.webui.yml up -d
-```
-
-To inspect configuration:
-
-```bash
-docker compose -f docker-compose.webui.yml config --quiet
-```
-
-## Validation status
-
-This is a new web-only deployment branch. The Compose and Nginx files
-have configuration validation in CI, but a successful live connection
-from **your** VPS through Cloudflare and a real device is **not claimed
-until tested**.
-
-Cloudflare reference:
-https://developers.cloudflare.com/tunnel/get-started/
+This is an initial integration. Automated CI checks lint the installer,
+validate Compose and Nginx configuration, and confirm that only
+localhost CWMP/NBI ports are published. It has not been verified
+against your particular live Cloudflare tunnel, VPS, or STB.
