@@ -1,0 +1,121 @@
+# Full GenieACS + Pyrogram deployment behind Cloudflare Tunnel.
+# Start with: docker compose -f docker-compose.cloudflare.yml up -d --build
+# Only Cloudflare's outbound tunnel is public. No inbound/public IPv4 needed.
+name: genieacs-cloudflare
+
+x-acs: &acs
+  build:
+    context: .
+    dockerfile: deploy/vps/GenieACS.Dockerfile
+  restart: unless-stopped
+  depends_on:
+    mongo:
+      condition: service_healthy
+  networks: [private, origin, egress]
+  environment: &acs-env
+    GENIEACS_MONGODB_CONNECTION_URL: mongodb://acs:${MONGO_ACS_PASSWORD:?Set MONGO_ACS_PASSWORD}@mongo:27017/genieacs?authSource=genieacs
+    GENIEACS_CWMP_WORKER_PROCESSES: "2"
+    GENIEACS_NBI_WORKER_PROCESSES: "1"
+    GENIEACS_FS_WORKER_PROCESSES: "1"
+    GENIEACS_UI_WORKER_PROCESSES: "1"
+    GENIEACS_UI_JWT_SECRET: ${GENIEACS_UI_JWT_SECRET:?Set GENIEACS_UI_JWT_SECRET}
+    # External HTTPS terminates at Cloudflare; the gateway strips /files/ internally.
+    GENIEACS_FS_URL_PREFIX: https://${PUBLIC_HOST:-api.cat6.in}/files/
+
+services:
+  mongo:
+    image: mongo:8.0
+    restart: unless-stopped
+    networks: [private]
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?Set MONGO_ROOT_PASSWORD}
+      MONGO_APP_PASSWORD: ${MONGO_APP_PASSWORD:?Set MONGO_APP_PASSWORD}
+      MONGO_ACS_PASSWORD: ${MONGO_ACS_PASSWORD:?Set MONGO_ACS_PASSWORD}
+      CPE_USERNAME: ${CPE_USERNAME:?Set CPE_USERNAME}
+      CPE_PASSWORD: ${CPE_PASSWORD:?Set CPE_PASSWORD}
+    volumes:
+      - mongo-data:/data/db
+      - ./deploy/vps/mongo-init.js:/docker-entrypoint-initdb.d/manager.js:ro
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  cwmp:
+    <<: *acs
+    command: [genieacs-cwmp]
+    # HTTP only INSIDE Docker. Never publish port 7547 to the host.
+
+  nbi:
+    <<: *acs
+    command: [genieacs-nbi]
+    networks: [private]
+    # No published port; NBI is reachable only by trusted internal services.
+
+  fs:
+    <<: *acs
+    command: [genieacs-fs]
+    # Firmware downloads are proxied from https://api.cat6.in/files/.
+
+  ui:
+    <<: *acs
+    command: [genieacs-ui]
+    networks: [private, egress]
+    ports:
+      - "127.0.0.1:3000:3000"
+    # SSH tunnel only. Do not add a public tunnel route for the setup UI.
+
+  manager:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DEPLOYMENT_MODE: full
+      BOT_ENABLED: "true"
+      APP_PORT: "7860"
+      MONGODB_URI: mongodb://manager:${MONGO_APP_PASSWORD:?Set MONGO_APP_PASSWORD}@mongo:27017/genieacs_manager?authSource=genieacs_manager
+      GENIEACS_NBI_URL: http://nbi:7557
+    depends_on:
+      mongo:
+        condition: service_healthy
+      nbi:
+        condition: service_started
+    networks: [private, origin, egress]
+    # No host port. Gateway handles authorized /api/* requests.
+
+  gateway:
+    image: nginx:stable-alpine
+    restart: unless-stopped
+    volumes:
+      - ./deploy/cloudflare/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on: [manager, cwmp, fs]
+    networks: [origin, tunnel]
+    # One public hostname -> /cwmp/, /files/, /api/*, and /healthz.
+    # Only cloudflared can reach the gateway from outside the origin network.
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: ["tunnel", "--no-autoupdate", "run"]
+    env_file:
+      - .env.tunnel
+    depends_on: [gateway]
+    networks: [tunnel]
+    # The TUNNEL_TOKEN env var is read by cloudflared, not placed in CLI args.
+    # Configure exactly one published route in the CF dashboard:
+    # api.cat6.in -> http://gateway:8080
+
+networks:
+  private:
+    internal: true
+  origin:
+    internal: true
+  egress: {}
+  tunnel: {}
+
+volumes:
+  mongo-data: {}
