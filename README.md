@@ -7,6 +7,21 @@ app_port: 7860
 
 # GenieACS Pyrogram Manager
 
+> **This branch is the ACS-only WEB UI edition.** No Telegram bot is
+> deployed, and you do not need a public IPv4 address. Browse GenieACS
+> at **https://acs.cat6.in/** after deployment with Cloudflare Tunnel.
+> All device tasks and configuration are managed through the **native
+> GenieACS web interface**. **Start with
+> [deploy/webui/README.md](deploy/webui/README.md)** and use
+> `docker-compose.webui.yml`. Do **not** follow the normal Compose/Telegram
+> instructions below for this branch.
+>
+> **JFC-Group Housekeeping PoC:** centralizing GenieACS is supported; its
+> legacy STB-specific local TLS front end, 8443/9443 access and ADB phases
+> are **not** eliminated by Cloudflare. See the compatibility guide before
+> assuming that a stock STB can register via `acs.cat6.in`.
+
+
 A Telegram control center for **authorized, enrolled TR-069 devices**. Uses Python 3.12,
 Kurigram (maintained Pyrogram-compatible APIs), TgCrypto, FastAPI, PyMongo Async and Docker.
 Supports an all-VPS stack or a Hugging Face bot/gateway with a durable VPS core.
