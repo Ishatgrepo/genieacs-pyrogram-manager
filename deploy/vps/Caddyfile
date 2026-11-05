@@ -1,0 +1,4 @@
+{$MANAGER_HOST} {
+    encode gzip
+    reverse_proxy manager:7860
+}

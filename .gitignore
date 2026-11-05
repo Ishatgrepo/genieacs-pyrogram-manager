@@ -1,0 +1,17 @@
+.env
+.env.*
+!.env.example
+*.session*
+*.pyc
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.venv/
+*.egg-info/
+*.pem
+*.key
+*.crt
+backups/
+secrets/
+dist/
+build/

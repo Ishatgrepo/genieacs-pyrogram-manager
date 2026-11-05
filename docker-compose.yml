@@ -1,0 +1,99 @@
+name: genieacs-manager
+x-acs: &acs
+  build:
+    context: .
+    dockerfile: deploy/vps/GenieACS.Dockerfile
+  restart: unless-stopped
+  depends_on:
+    mongo:
+      condition: service_healthy
+  networks: [private, outbound]
+  environment: &acs-env
+    GENIEACS_MONGODB_CONNECTION_URL: mongodb://acs:${MONGO_ACS_PASSWORD:?Set MONGO_ACS_PASSWORD}@mongo:27017/genieacs?authSource=genieacs
+    GENIEACS_CWMP_WORKER_PROCESSES: "2"
+    GENIEACS_NBI_WORKER_PROCESSES: "1"
+    GENIEACS_FS_WORKER_PROCESSES: "1"
+    GENIEACS_UI_WORKER_PROCESSES: "1"
+    GENIEACS_UI_JWT_SECRET: ${GENIEACS_UI_JWT_SECRET:?Set GENIEACS_UI_JWT_SECRET}
+    GENIEACS_FS_URL_PREFIX: https://${CWMP_HOST:?Set CWMP_HOST}:7567/
+services:
+  mongo:
+    image: mongo:8.0
+    restart: unless-stopped
+    networks: [private]
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?Set MONGO_ROOT_PASSWORD}
+      MONGO_APP_PASSWORD: ${MONGO_APP_PASSWORD:?Set MONGO_APP_PASSWORD}
+      MONGO_ACS_PASSWORD: ${MONGO_ACS_PASSWORD:?Set MONGO_ACS_PASSWORD}
+      CPE_USERNAME: ${CPE_USERNAME:?Set CPE_USERNAME}
+      CPE_PASSWORD: ${CPE_PASSWORD:?Set CPE_PASSWORD}
+    volumes:
+      - mongo-data:/data/db
+      - ./deploy/vps/mongo-init.js:/docker-entrypoint-initdb.d/manager.js:ro
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+  cwmp:
+    <<: *acs
+    command: [genieacs-cwmp]
+    ports: ["7547:7547"]
+    volumes: ["./secrets/tls:/tls:ro"]
+    environment:
+      <<: *acs-env
+      GENIEACS_CWMP_SSL_CERT: /tls/fullchain.pem
+      GENIEACS_CWMP_SSL_KEY: /tls/privkey.pem
+  nbi:
+    <<: *acs
+    command: [genieacs-nbi]
+    # No host port: accessible only by trusted containers in the private network.
+  fs:
+    <<: *acs
+    command: [genieacs-fs]
+    ports: ["7567:7567"]
+    volumes: ["./secrets/tls:/tls:ro"]
+    environment:
+      <<: *acs-env
+      GENIEACS_FS_SSL_CERT: /tls/fullchain.pem
+      GENIEACS_FS_SSL_KEY: /tls/privkey.pem
+  ui:
+    <<: *acs
+    command: [genieacs-ui]
+    ports: ["127.0.0.1:3000:3000"]
+  manager:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      MONGODB_URI: mongodb://manager:${MONGO_APP_PASSWORD:?Set MONGO_APP_PASSWORD}@mongo:27017/genieacs_manager?authSource=genieacs_manager
+      GENIEACS_NBI_URL: http://nbi:7557
+      APP_PORT: "7860"
+    depends_on:
+      mongo:
+        condition: service_healthy
+      nbi:
+        condition: service_started
+    networks: [private, outbound]
+    ports: ["127.0.0.1:7860:7860"]
+  proxy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    networks: [private, outbound]
+    environment:
+      MANAGER_HOST: ${MANAGER_HOST:?Set MANAGER_HOST}
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./deploy/vps/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on: [manager]
+networks:
+  private:
+    internal: true
+  outbound: {}
+volumes:
+  mongo-data: {}
+  caddy-data: {}
+  caddy-config: {}

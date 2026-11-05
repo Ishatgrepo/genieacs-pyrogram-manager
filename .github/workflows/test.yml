@@ -1,0 +1,41 @@
+name: Validate manager
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      mongo:
+        image: mongo:8.0
+        ports: ["27017:27017"]
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.adminCommand(\"ping\").ok'"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install -r requirements.lock -e '.[test]'
+      - run: ruff check app tests
+      - run: pytest -q
+      - run: pytest -q
+        env:
+          TEST_MONGODB_URI: mongodb://localhost:27017
+      - run: docker build -t genieacs-manager:test .
+      - run: docker build -f deploy/vps/GenieACS.Dockerfile -t genieacs-engine:test .
+      - name: Validate Compose with throwaway CI-only settings
+        run: |
+          cp .env.example .env
+          python - <<'PY'
+          from pathlib import Path
+          text = Path('.env').read_text()
+          for key in ('MONGO_ROOT_PASSWORD','MONGO_APP_PASSWORD','MONGO_ACS_PASSWORD','GENIEACS_UI_JWT_SECRET','API_TOKEN','BOT_API_TOKEN','CPE_USERNAME','CPE_PASSWORD'):
+              text = text.replace(key+'=\n', key+'='+'c'*64+'\n')
+          Path('.env').write_text(text)
+          PY
+          docker compose config --quiet
