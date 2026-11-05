@@ -1,6 +1,7 @@
-# Web-only GenieACS through a Cloudflare Tunnel; no Telegram/manager service.
-# Cloudflare public hostname: https://acs.cat6.in
-# Tunnel published application: acs.cat6.in -> http://gateway:8080
+# JFC-style, web-only GenieACS behind Cloudflare Tunnel.
+# One central ACS server; no Telegram bot, public IPv4, Mongo/CPE passwords.
+# Create credentials and start with: bash deploy/webui/setup.sh
+# Cloudflare application: acs.cat6.in -> http://gateway:8080
 name: genieacs-webui
 
 x-genieacs: &genieacs
@@ -13,9 +14,9 @@ x-genieacs: &genieacs
       condition: service_healthy
   networks: [database, application]
   environment: &genieacs-env
-    GENIEACS_MONGODB_CONNECTION_URL: mongodb://acs:${MONGO_ACS_PASSWORD:?Set MONGO_ACS_PASSWORD}@mongo:27017/genieacs?authSource=genieacs
-    GENIEACS_UI_JWT_SECRET: ${GENIEACS_UI_JWT_SECRET:?Set GENIEACS_UI_JWT_SECRET}
-    GENIEACS_FS_URL_PREFIX: https://${ACS_HOST:-acs.cat6.in}/files/
+    GENIEACS_MONGODB_CONNECTION_URL: mongodb://mongo:27017/genieacs
+    GENIEACS_UI_JWT_SECRET: ${GENIEACS_UI_JWT_SECRET:?Run bash deploy/webui/setup.sh first}
+    GENIEACS_FS_URL_PREFIX: https://acs.cat6.in/files/
     GENIEACS_LOG_FORMAT: json
     GENIEACS_ACCESS_LOG_FORMAT: json
 
@@ -23,16 +24,11 @@ services:
   mongo:
     image: mongo:8.0
     restart: unless-stopped
-    environment:
-      MONGO_INITDB_ROOT_USERNAME: root
-      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?Set MONGO_ROOT_PASSWORD}
-      MONGO_ACS_PASSWORD: ${MONGO_ACS_PASSWORD:?Set MONGO_ACS_PASSWORD}
-      CPE_USERNAME: ${CPE_USERNAME:?Set CPE_USERNAME}
-      CPE_PASSWORD: ${CPE_PASSWORD:?Set CPE_PASSWORD}
     volumes:
       - webui-mongo:/data/db
-      - ./deploy/webui/mongo-init.js:/docker-entrypoint-initdb.d/genieacs.js:ro
     networks: [database]
+    # No MongoDB auth like JFC: protected by internal-only Docker network.
+    # No public Mongo port, and never publish one.
     healthcheck:
       test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
       interval: 10s
@@ -45,8 +41,7 @@ services:
     environment:
       <<: *genieacs-env
       GENIEACS_CWMP_WORKER_PROCESSES: "2"
-    # Optional secure loopback target for a site-local JFC TLS proxy through
-    # SSH/VPN port forwarding. Never bind this on 0.0.0.0.
+    # localhost-only for optional authenticated SSH/VPN site relay.
     ports: ["127.0.0.1:7547:7547"]
 
   nbi:
@@ -56,8 +51,7 @@ services:
       <<: *genieacs-env
       GENIEACS_NBI_WORKER_PROCESSES: "1"
     networks: [database]
-    # Optional for JFC stage1.sh through an authenticated SSH/VPN tunnel only;
-    # NEVER make NBI public or expose this as a Cloudflare HTTP application.
+    # NBI has no web login. NEVER expose it on a public port/hostname.
     ports: ["127.0.0.1:7557:7557"]
 
   fs:
@@ -73,8 +67,6 @@ services:
     environment:
       <<: *genieacs-env
       GENIEACS_UI_WORKER_PROCESSES: "1"
-    # The native GenieACS web UI is served via the gateway with additional
-    # HTTP Basic authentication, not directly from a host port.
 
   gateway:
     image: nginx:stable-alpine
@@ -84,7 +76,7 @@ services:
       - ./deploy/webui/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./secrets/ui.htpasswd:/etc/nginx/auth/ui.htpasswd:ro
     networks: [application, cloudflare]
-    # No host-published ports; only cloudflared can reach gateway:8080.
+    # Cloudflare is the only external path. No published host port.
 
   cloudflared:
     image: cloudflare/cloudflared:latest
@@ -93,7 +85,6 @@ services:
     env_file: [.env.tunnel]
     depends_on: [gateway]
     networks: [cloudflare]
-    # Requires a remotely-managed tunnel and TUNNEL_TOKEN in .env.tunnel.
 
 networks:
   database:
