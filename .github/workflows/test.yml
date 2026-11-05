@@ -39,3 +39,25 @@ jobs:
           Path('.env').write_text(text)
           PY
           docker compose config --quiet
+          cp deploy/cloudflare/tunnel.env.sample .env.tunnel
+          docker compose -f docker-compose.cloudflare.yml config --quiet
+          docker compose -f docker-compose.cloudflare.yml config --format json > /tmp/cloudflare-compose.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          cfg = json.loads(Path('/tmp/cloudflare-compose.json').read_text())
+          services = cfg['services']
+          expected = {'mongo', 'cwmp', 'nbi', 'fs', 'ui', 'manager', 'gateway', 'cloudflared'}
+          assert expected.issubset(services), sorted(services)
+          for name in expected - {'ui'}:
+              assert not services[name].get('ports'), f'{name} must not publish a host port'
+          ui_ports = services['ui']['ports']
+          assert len(ui_ports) == 1 and ui_ports[0]['host_ip'] == '127.0.0.1'
+          assert services['cloudflared']['environment']['TUNNEL_TOKEN']
+          PY
+          docker run --rm \
+            --add-host cwmp:127.0.0.1 \
+            --add-host fs:127.0.0.1 \
+            --add-host manager:127.0.0.1 \
+            -v "$PWD/deploy/cloudflare/nginx.conf:/etc/nginx/nginx.conf:ro" \
+            nginx:stable-alpine nginx -t
